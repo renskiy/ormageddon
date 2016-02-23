@@ -15,13 +15,10 @@ def patch(obj, attr, value, default=None):
     setattr(obj, attr, original)
 
 
-async def async_next(async_iterator):
-    return await async_iterator.__anext__()
+class TaskConnectionLocal(peewee._BaseConnectionLocal, tasklocals.local):
 
-
-class ResultIterator(peewee.ResultIterator):
-
-    pass
+    def __init__(self, **kwargs):
+        super().__init__()
 
 
 class Model(peewee.Model):
@@ -38,11 +35,9 @@ class SelectQuery(peewee.SelectQuery):
     async def __aiter__(self):
         return self.execute()
 
-    async def get(self):
-        with patch(peewee, 'next', async_next, default=next):
-            future = super().get()
+    async def async_get(self):
         try:
-            return await future
+            return await super().get()
         except StopAsyncIteration:
             raise self.model_class.DoesNotExist(
                 'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
@@ -51,8 +46,12 @@ class SelectQuery(peewee.SelectQuery):
 
 class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cursor = None
+
     async def iterate(self):
-        cursor = await self.cursor
+        cursor = self._cursor = self._cursor or await self.cursor
         row = await cursor.fetchone()
         with contextlib.ExitStack() as context_stack:
             context_stack.enter_context(patch(self, 'cursor', cursor))
@@ -62,8 +61,8 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
             except StopIteration:
                 raise StopAsyncIteration
 
-    # async def __aiter__(self):
-    #     return ResultIterator(super().__iter__())
+    async def __aiter__(self):
+        return self
 
     async def __anext__(self):
         populated = self._populated
@@ -82,7 +81,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
     def __init__(self, *args, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
         self.pool = asyncio.ensure_future(self._create_pool(), loop=self.loop)
-        # self.__local = TaskConnectionLocal(loop=self.loop)
+        self.__local = TaskConnectionLocal(loop=self.loop, strict=False)
         super().__init__(*args, **kwargs)
 
     async def _create_pool(self):
@@ -98,27 +97,63 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     async def get_cursor(self, connection=None):
         if not connection:
-            connection = self.get_conn()
-        return await (await connection).cursor()
+            connection = await self.get_conn()
+        return await connection.cursor()
 
     def get_result_wrapper(self, wrapper_type):
         if wrapper_type == peewee.RESULTS_NAIVE:
             return NaiveQueryResultWrapper
 
-    async def _execute_sql(self, sql, params=None, require_commit=True,
-                           transaction=None):
+    def push_transaction(self, transaction):
+        self.__local.transactions.append(transaction)
+
+    def pop_transaction(self):
+        return self.__local.transactions.pop()
+
+    def transaction_depth(self):
+        return len(self.__local.transactions)
+
+    def get_transaction(self):
+        if not self.get_autocommit():
+            try:
+                return self.__local.transactions[-1]
+            except IndexError:
+                raise RuntimeError('With autocommit=False `execute_sql()` must be called within the transaction')
+
+    async def _execute_sql(self,
+                           sql,
+                           params=None,
+                           require_commit=True,
+                           transaction=None,
+                           ):
         with self.exception_wrapper():
-            cursor = await self.get_cursor()
+            if transaction:
+                cursor = await transaction.get_cursor()
+            else:
+                cursor = await self.get_cursor()
             await cursor.execute(sql, params)
+            if require_commit and not transaction:
+                await self.commit(cursor.connection)
+                (await self.pool).release(cursor.connection)
         return cursor
 
     def execute_sql(self, sql, params=None, require_commit=True):
+        transaction = self.get_transaction()
         return self._execute_sql(
             sql,
             params=params,
             require_commit=require_commit,
+            transaction=transaction,
         )
 
+    async def _commit(self, connection):
+        cursor = await self.get_cursor(connection)
+        with contextlib.closing(cursor):
+            await cursor.execute('COMMIT')
+
+    def commit(self, connection=None):
+        # TODO: if not connection use current transaction
+        return self._commit(connection=connection)
 
 
 
@@ -195,10 +230,6 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 #     def rollback(self, connection=None):
 #         return asyncio.ensure_future(self._rollback(connection), loop=self.loop)
 #
-#
-# class TaskConnectionLocal(peewee._BaseConnectionLocal, tasklocals.local):
-#
-#     pass
 #
 #
 # class Transaction(peewee.transaction):
