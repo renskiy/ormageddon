@@ -1,0 +1,4 @@
+aiopg
+peewee
+
+-e git+https://github.com/renskiy/tasklocals.git#egg=tasklocals-renskiy
