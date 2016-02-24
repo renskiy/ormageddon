@@ -35,7 +35,7 @@ class SelectQuery(peewee.SelectQuery):
     async def __aiter__(self):
         return self.execute()
 
-    async def async_get(self):
+    async def get(self):
         try:
             return await super().get()
         except StopAsyncIteration:
@@ -62,6 +62,7 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
                 raise StopAsyncIteration
 
     async def __aiter__(self):
+        # TODO: return either cache iterator or self
         return self
 
     async def __anext__(self):
