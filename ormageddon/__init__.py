@@ -2,9 +2,8 @@ import asyncio
 import contextlib
 
 import aiopg
-import tasklocals
-
 import peewee
+import tasklocals
 
 
 @contextlib.contextmanager
