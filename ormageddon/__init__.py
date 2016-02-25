@@ -48,7 +48,7 @@ class ResultIterator(peewee.ResultIterator):
 
     async def __anext__(self):
         try:
-            result = super().next()
+            result = self.next()
             if not self.qrw._populated:
                 result = await result
                 self.qrw._result_cache[-1] = result
