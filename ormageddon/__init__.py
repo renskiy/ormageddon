@@ -33,7 +33,7 @@ class Model(peewee.Model):
 class SelectQuery(peewee.SelectQuery):
 
     async def __aiter__(self):
-        return self.execute()
+        return await self.execute().__aiter__()
 
     async def get(self):
         try:
@@ -42,6 +42,24 @@ class SelectQuery(peewee.SelectQuery):
             raise self.model_class.DoesNotExist(
                 'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
                 % self.sql())
+
+
+class ResultIterator(peewee.ResultIterator):
+
+    async def __anext__(self):
+        try:
+            result = super().next()
+            if not self.qrw._populated:
+                result = await result
+                self.qrw._result_cache[-1] = result
+            return result
+        except StopAsyncIteration:
+            self.qrw._result_cache.pop()
+            self.qrw._ct -= 1
+            self._idx -= 1
+            raise
+        except StopIteration:
+            raise StopAsyncIteration
 
 
 class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
@@ -61,20 +79,26 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
             except StopIteration:
                 raise StopAsyncIteration
 
-    async def __aiter__(self):
-        # TODO: return either cache iterator or self
-        return self
+    def __iter__(self):
+        assert self._populated
+        return super().__iter__()
 
-    async def __anext__(self):
-        populated = self._populated
-        try:
-            return await self.next()
-        except StopIteration:
-            if not populated:
-                self._ct -= 1
-                self._idx -= 1
-                self._result_cache.pop()
-            raise StopAsyncIteration
+    async def __aiter__(self):
+        return ResultIterator(self)
+
+    # async def __anext__(self):
+    #     print('NaiveQueryResultWrapper.__anext__')
+    #     try:
+    #         result = await self.next()
+    #         self._result_cache[-1] = result
+    #         return result
+    #     except StopAsyncIteration:
+    #         self._ct -= 1
+    #         self._idx -= 1
+    #         self._result_cache.pop()
+    #         raise
+    #     except StopIteration:
+    #         raise StopAsyncIteration
 
 
 class PostgresqlDatabase(peewee.PostgresqlDatabase):
