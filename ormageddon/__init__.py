@@ -43,6 +43,10 @@ class SelectQuery(peewee.SelectQuery):
                 'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
                 % self.sql())
 
+    async def first(self):
+        with contextlib.suppress(self.model_class.DoesNotExist):
+            return await self.get()
+
 
 class ResultIterator(peewee.ResultIterator):
 
