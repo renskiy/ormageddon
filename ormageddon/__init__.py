@@ -89,25 +89,11 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
             return await super().iterate()
 
     def __iter__(self):
-        assert self._populated
+        assert self._populated, "Can't iterate over not executed query"
         return super().__iter__()
 
     async def __aiter__(self):
         return ResultIterator(self)
-
-    # async def __anext__(self):
-    #     print('NaiveQueryResultWrapper.__anext__')
-    #     try:
-    #         result = await self.next()
-    #         self._result_cache[-1] = result
-    #         return result
-    #     except StopAsyncIteration:
-    #         self._ct -= 1
-    #         self._idx -= 1
-    #         self._result_cache.pop()
-    #         raise
-    #     except StopIteration:
-    #         raise StopAsyncIteration
 
 
 class Transaction(peewee.transaction):
@@ -178,11 +164,15 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         super().__init__(*args, **kwargs)
 
     async def _create_pool(self):
-        return await aiopg.create_pool(
-            loop=self.loop,
-            database=self.database,
-            **self.connect_kwargs
-        )
+        try:
+            return await aiopg.create_pool(
+                loop=self.loop,
+                database=self.database,
+                **self.connect_kwargs
+            )
+        except:
+            self.loop.stop()
+            raise
 
     async def get_conn(self):
         pool = await self.pool
