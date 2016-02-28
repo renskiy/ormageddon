@@ -243,6 +243,9 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
                 connection=transaction.connection,
                 force_release_connection=True,
             )
+        future = asyncio.Future(loop=self.loop)
+        future.set_result(None)
+        return future
 
 
 
