@@ -29,3 +29,15 @@ You can test ORMageddon using following little example:
     async def print_all_users():
         async for user in User.select():
             print(user)
+
+Transactions
+------------
+
+    async def manual_transaction():
+        await db.begin()
+        # do whatever you need
+        await db.commit()
+        
+    async def transaction_context():
+        async with db.transaction() as transaction:
+            # do whatever you need
