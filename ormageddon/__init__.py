@@ -96,63 +96,28 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
         return ResultIterator(self)
 
 
-class Transaction(peewee.transaction):
+class Transaction:
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.connection = None
-        self.commit_or_rollback = None
-        self.queries = []
+    def __init__(self, db):
+        self.db = db
+        self._autocommit = db.get_autocommit()
+        self._connection = None
 
-    def _begin(self):
-        self.connection = self.db.begin()
+    def _get_connection(self):
+        if self._connection is None:
+            raise RuntimeError('Transaction not started yet, use start()')
+        return self._connection
 
+    def _set_connection(self, connection):
+        self._connection = connection
 
+    connection = property(_get_connection, _set_connection)
 
+    def disable_autocommit(self):
+        self.db.set_autocommit(False)
 
-
-
-
-    @property
-    def loop(self):
-        return self.db.loop
-
-    @asyncio.coroutine
-    def get_cursor(self):
-        return (yield from self.db.get_cursor(self.connection))
-
-    @asyncio.coroutine
-    def _commit(self):
-        if self.queries:
-            yield from asyncio.wait(self.queries, loop=self.loop)
-            self.queries.clear()
-        yield from self.db.commit(self.connection)
-
-    def commit(self, begin=True):
-        self.commit_or_rollback = asyncio.ensure_future(
-            self._commit(),
-            loop=self.loop,
-        )
-
-    @asyncio.coroutine
-    def _rollback(self):
-        yield from self.db.rollback(self.connection)
-
-    def rollback(self, begin=True):
-        self.commit_or_rollback = asyncio.ensure_future(
-            self._rollback(),
-            loop=self.loop,
-        )
-
-    @asyncio.coroutine
-    def _release_connection(self):
-        pool = yield from self.db.pool
-        yield from self.commit_or_rollback
-        pool.release(self.connection.result())
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        super().__exit__(exc_type, exc_val, exc_tb)
-        asyncio.ensure_future(self._release_connection())
+    def restore_autocommit(self):
+        self.db.set_autocommit(self._autocommit)
 
 
 class PostgresqlDatabase(peewee.PostgresqlDatabase):
@@ -179,14 +144,16 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         connection = await pool.acquire()
         return connection
 
-    async def get_cursor(self, connection=None):
-        if not connection:
-            should_release_connection = True
-            connection = await self.get_conn()
-        else:
-            should_release_connection = False
+    async def get_cursor(
+        self,
+        connection=None,
+        release_new_connection=True,
+        force_release_connection=False,
+    ):
+        need_release_connection = release_new_connection and not connection
+        connection = connection or await self.get_conn()
         cursor = await connection.cursor()
-        if should_release_connection:
+        if need_release_connection or force_release_connection:
             pool = await self.pool
             weakref.finalize(cursor, pool.release, connection)
         return cursor
@@ -204,23 +171,20 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         return self.__local.autocommit
 
     def transaction(self):
-        return Transaction(self)
+        return self.begin()
 
     def push_transaction(self, transaction):
         self.__local.transactions.append(transaction)
 
     def pop_transaction(self):
-        return self.__local.transactions.pop()
+        self.__local.transactions.pop()
 
     def transaction_depth(self):
         return len(self.__local.transactions)
 
-    def get_transaction(self):
-        if not self.get_autocommit():
-            try:
-                return self.__local.transactions[-1]
-            except IndexError:
-                raise RuntimeError
+    def get_transaction(self) -> Transaction:
+        if self.transaction_depth() == 1:
+            return self.__local.transactions[-1]
 
     async def _execute_sql(
         self,
@@ -230,11 +194,10 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         connection=None,
     ):
         with self.exception_wrapper():
-            connection = connection and await connection
             cursor = await self.get_cursor(connection)
             await cursor.execute(sql, params)
-            if require_commit and self.get_autocommit():
-                await self.commit(cursor.connection)
+            if require_commit:
+                await self._commit(cursor.connection)
         return cursor
 
     def execute_sql(self, sql, params=None, require_commit=True):
@@ -243,25 +206,43 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         return self._execute_sql(
             sql,
             params=params,
-            require_commit=require_commit,
+            require_commit=require_commit and self.get_autocommit(),
             connection=connection,
         )
 
-    async def _begin(self):
-        cursor = await self.get_cursor()
+    async def _begin(self, transaction):
+        cursor = await self.get_cursor(release_new_connection=False)
         await cursor.execute('BEGIN')
-        return cursor.connection
+        transaction.connection = cursor.connection
+        return transaction
 
     def begin(self):
-        return self._begin()
+        transaction = self.get_transaction()
+        if not transaction:
+            transaction = Transaction(self)
+            transaction.disable_autocommit()
+            self.push_transaction(transaction)
+            return self._begin(transaction)
+        future = asyncio.Future(loop=self.loop)
+        future.set_result(transaction)
+        return future
 
-    async def _commit(self, connection):
-        cursor = await self.get_cursor(connection)
+    async def _commit(self, connection, force_release_connection=False):
+        cursor = await self.get_cursor(
+            connection,
+            force_release_connection=force_release_connection,
+        )
         await cursor.execute('COMMIT')
 
-    def commit(self, connection=None):
-        # TODO: use current transaction?
-        return self._commit(connection=connection)
+    def commit(self, transaction=None):
+        transaction = transaction or self.get_transaction()
+        if transaction:
+            self.pop_transaction()
+            transaction.restore_autocommit()
+            return self._commit(
+                connection=transaction.connection,
+                force_release_connection=True,
+            )
 
 
 
