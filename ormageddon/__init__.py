@@ -223,6 +223,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
             transaction.disable_autocommit()
             self.push_transaction(transaction)
             return self._begin(transaction)
+        # TODO raise warning?
         future = asyncio.Future(loop=self.loop)
         future.set_result(transaction)
         return future
@@ -243,6 +244,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
                 connection=transaction.connection,
                 force_release_connection=True,
             )
+        # TODO raise warning?
         future = asyncio.Future(loop=self.loop)
         future.set_result(None)
         return future
