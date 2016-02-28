@@ -96,6 +96,20 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
         return ResultIterator(self)
 
 
+class TransactionContext:
+
+    def __init__(self, transaction):
+        self.transaction = transaction
+        self._transaction = None
+
+    async def __aenter__(self):
+        self._transaction = transaction = await self.transaction
+        return transaction
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._transaction.commit()
+
+
 class Transaction:
 
     def __init__(self, db):
@@ -118,6 +132,9 @@ class Transaction:
 
     def restore_autocommit(self):
         self.db.set_autocommit(self._autocommit)
+
+    async def commit(self):
+        await self.db.commit(self)
 
 
 class PostgresqlDatabase(peewee.PostgresqlDatabase):
@@ -171,7 +188,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         return self.__local.autocommit
 
     def transaction(self):
-        return self.begin()
+        return TransactionContext(self.begin())
 
     def push_transaction(self, transaction):
         self.__local.transactions.append(transaction)
