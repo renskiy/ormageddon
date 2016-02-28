@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import weakref
 
 import aiopg
 import peewee
@@ -17,8 +18,8 @@ def patch(obj, attr, value, default=None):
 class TaskConnectionLocal(peewee._BaseConnectionLocal, tasklocals.local):
 
     def __init__(self, **kwargs):
-        # ignore asyncio current task absence
         with contextlib.suppress(RuntimeError):
+            # ignore asyncio current task absence
             super().__init__()
 
 
@@ -73,16 +74,19 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
         super().__init__(*args, **kwargs)
         self._cursor = None
 
+    async def process_row(self, row):
+        row = await row
+        if not row:
+            self._populated = True
+            if not getattr(self.cursor, 'name', None):
+                self.cursor.close()
+            raise StopAsyncIteration
+        return super().process_row(row)
+
     async def iterate(self):
         cursor = self._cursor = self._cursor or await self.cursor
-        row = await cursor.fetchone()
-        with contextlib.ExitStack() as context_stack:
-            context_stack.enter_context(patch(self, 'cursor', cursor))
-            context_stack.enter_context(patch(cursor, 'fetchone', lambda: row))
-            try:
-                return super().iterate()
-            except StopIteration:
-                raise StopAsyncIteration
+        with patch(self, 'cursor', cursor):
+            return await super().iterate()
 
     def __iter__(self):
         assert self._populated
@@ -182,12 +186,20 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     async def get_conn(self):
         pool = await self.pool
-        return await pool.acquire()
+        connection = await pool.acquire()
+        return connection
 
     async def get_cursor(self, connection=None):
         if not connection:
+            should_release_connection = True
             connection = await self.get_conn()
-        return await connection.cursor()
+        else:
+            should_release_connection = False
+        cursor = await connection.cursor()
+        if should_release_connection:
+            pool = await self.pool
+            weakref.finalize(cursor, pool.release, connection)
+        return cursor
 
     def get_result_wrapper(self, wrapper_type):
         if wrapper_type == peewee.RESULTS_NAIVE:
@@ -220,19 +232,19 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
             except IndexError:
                 raise RuntimeError
 
-    async def _execute_sql(self,
-                           sql,
-                           params=None,
-                           require_commit=True,
-                           connection=None,
-                           ):
+    async def _execute_sql(
+        self,
+        sql,
+        params=None,
+        require_commit=True,
+        connection=None,
+    ):
         with self.exception_wrapper():
             connection = connection and await connection
             cursor = await self.get_cursor(connection)
             await cursor.execute(sql, params)
             if require_commit and self.get_autocommit():
                 await self.commit(cursor.connection)
-                # (await self.pool).release(cursor.connection)
         return cursor
 
     def execute_sql(self, sql, params=None, require_commit=True):
@@ -247,8 +259,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     async def _begin(self):
         cursor = await self.get_cursor()
-        with contextlib.closing(cursor):
-            await cursor.execute('BEGIN')
+        await cursor.execute('BEGIN')
         return cursor.connection
 
     def begin(self):
@@ -256,11 +267,10 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     async def _commit(self, connection):
         cursor = await self.get_cursor(connection)
-        with contextlib.closing(cursor):
-            await cursor.execute('COMMIT')
+        await cursor.execute('COMMIT')
 
     def commit(self, connection=None):
-        assert connection
+        # TODO: use current transaction?
         return self._commit(connection=connection)
 
 
