@@ -118,8 +118,7 @@ class Transaction:
         self._connection = None
 
     def _get_connection(self):
-        if self._connection is None:
-            raise RuntimeError('Transaction not started yet, use start()')
+        assert self._connection is not None
         return self._connection
 
     def _set_connection(self, connection):
