@@ -4,7 +4,7 @@ Changelog
 Release 0.1.1
 -------------
 
-- Enhancement: Implemented :code:`begin()` and :code:`commit()`
+- Enhancement: Implemented :code:`begin()`, :code:`commit()` and :code:`rollback()`
 - Enhancement: Implemented :code:`TransactionContext`
 
 Release 0.1

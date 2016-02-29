@@ -35,8 +35,13 @@ Transactions
 
     async def manual_transaction():
         await db.begin()
-        # do whatever you need
-        await db.commit()
+        try:
+            # do whatever you need
+        except:
+            await db.rollback()
+            raise
+        else:
+            await db.commit()
         
     async def transaction_context():
         async with db.transaction() as transaction:

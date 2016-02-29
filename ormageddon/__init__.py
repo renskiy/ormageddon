@@ -107,7 +107,9 @@ class TransactionContext:
         return transaction
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return await self._transaction.commit()
+        if exc_type is None:
+            return await self._transaction.commit()
+        return await self._transaction.rollback()
 
 
 class Transaction:
@@ -134,6 +136,9 @@ class Transaction:
 
     async def commit(self):
         await self.db.commit(self)
+
+    async def rollback(self):
+        await self.db.rollback(self)
 
 
 class PostgresqlDatabase(peewee.PostgresqlDatabase):
@@ -251,12 +256,26 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         )
         await cursor.execute('COMMIT')
 
-    def commit(self, transaction=None):
+    async def _rollback(self, connection, force_release_connection=False):
+        cursor = await self.get_cursor(
+            connection,
+            force_release_connection=force_release_connection,
+        )
+        await cursor.execute('ROLLBACK')
+
+    def commit_or_rollback(
+        self,
+        transaction=None,
+        commit=False,
+        rollback=False,
+    ):
+        assert commit ^ rollback, "You must choose either commit or rollback"
         transaction = transaction or self.get_transaction()
         if transaction:
             self.pop_transaction()
             transaction.restore_autocommit()
-            return self._commit(
+            command = commit and self._commit or rollback and self._rollback
+            return command(
                 connection=transaction.connection,
                 force_release_connection=True,
             )
@@ -265,71 +284,8 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         future.set_result(None)
         return future
 
+    def commit(self, transaction=None):
+        return self.commit_or_rollback(transaction=transaction, commit=True)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-#
-#     def push_transaction(self, transaction):
-#         self.__local.transactions.append(transaction)
-#
-#     def pop_transaction(self):
-#         return self.__local.transactions.pop()
-#
-#     def transaction_depth(self):
-#         return len(self.__local.transactions)
-#
-#     @asyncio.coroutine
-#     def _async_execute_sql(self, sql, params=None, transaction=None):
-#         cursor = yield from (yield from transaction.connection).cursor()
-#         print(id(transaction), sql)
-#         yield from cursor.execute(sql, parameters=params)
-#         return cursor
-#
-#     def async_execute_sql(self, sql, params=None, require_commit=True):
-#         # TODO require_commit?
-#         print(asyncio.Task.current_task())
-#         transaction = self.pop_transaction()
-#         future = asyncio.ensure_future(
-#             self._async_execute_sql(
-#                 sql,
-#                 params=params,
-#                 transaction=transaction,
-#             ),
-#             loop=self.loop,
-#         )
-#         self.push_transaction(transaction)
-#         return future
-#
-
-#
-#     @asyncio.coroutine
-#     def _commit(self, connection):
-#         cursor = yield from self.async_get_cursor(connection)
-#         with contextlib.closing(cursor):
-#             yield from cursor.execute('COMMIT')
-#
-#     def commit(self, connection=None):
-#         return asyncio.ensure_future(self._commit(connection), loop=self.loop)
-#
-#     @asyncio.coroutine
-#     def _rollback(self, connection):
-#         cursor = yield from self.async_get_cursor(connection)
-#         with contextlib.closing(cursor):
-#             yield from cursor.execute('ROLLBACK')
-#
-#     def rollback(self, connection=None):
-#         return asyncio.ensure_future(self._rollback(connection), loop=self.loop)
-#
-#
-#
+    def rollback(self, transaction=None):
+        return self.commit_or_rollback(transaction=transaction, rollback=True)
