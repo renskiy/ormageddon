@@ -26,8 +26,8 @@ You can test ORMageddon using following little example:
         user = await User.get(User.id == user_id)
         print(user)
         
-    async def print_all_users():
-        async for user in User.select():
+    async def print_users(start, stop):
+        async for user in User.select()[start:stop]:
             print(user)
 
 Transactions

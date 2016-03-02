@@ -1,6 +1,11 @@
 Changelog
 =========
 
+Release 0.1.2
+-------------
+
+- Enhancement: Added indexing and slicing support
+
 Release 0.1.1
 -------------
 

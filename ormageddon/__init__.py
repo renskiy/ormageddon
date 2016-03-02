@@ -37,17 +37,57 @@ class SelectQuery(peewee.SelectQuery):
     async def __aiter__(self):
         return await self.execute().__aiter__()
 
+    def _first_result(self):
+        return next(self.execute())
+
     async def get(self):
-        try:
-            return await super().get()
-        except StopAsyncIteration:
-            raise self.model_class.DoesNotExist(
-                'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
-                % self.sql())
+        clone = self.clone()
+        clone._limit = 1
+        with contextlib.suppress(StopAsyncIteration):
+            return await clone._first_result()
+        raise self.model_class.DoesNotExist(
+            'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
+            % self.sql())
 
     async def first(self):
-        with contextlib.suppress(self.model_class.DoesNotExist):
-            return await self.get()
+        with contextlib.suppress(StopAsyncIteration):
+            return await self._first_result()
+
+    async def _getitem(self):
+        with contextlib.suppress(StopAsyncIteration):
+            return await self._first_result()
+        raise IndexError
+
+    def __getitem__(self, item):
+        """
+        Behavior of this method is slightly different from the original one
+        because of we are considering `slice.start` while `peewee` not
+        """
+        clone = self.clone()
+        if isinstance(item, slice):
+            assert item.step is None, "Slicing with step is not supported"
+            if item.stop is not None and item.stop <= 0:
+                raise ValueError("stop must be positive if any")
+            if item.start is not None and item.start < 0:
+                raise ValueError("start can't be negative")
+            if item.start is not None and item.stop is not None and item.start >= item.stop:
+                raise ValueError("stop must be greater then start if any")
+            clone._offset = item.start
+            clone._limit = item.stop and (item.stop - (item.start or 0))
+            return clone
+        else:
+            clone._offset = item
+            clone._limit = 1
+            return clone._getitem()
+
+    def __len__(self):
+        raise NotImplementedError("Can't get len of the result in async mode")
+
+    def __await__(self):
+        return (yield from asyncio.ensure_future(
+            self.first(),
+            loop=self.database.loop,
+        ))
 
 
 class ResultIterator(peewee.ResultIterator):
@@ -89,11 +129,14 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
             return await super().iterate()
 
     def __iter__(self):
-        assert self._populated, "Can't iterate over not executed query"
-        return super().__iter__()
+        raise NotImplementedError("Can't iterate over query in async mode")
 
     async def __aiter__(self):
         return ResultIterator(self)
+
+    @property
+    def count(self):
+        raise NotImplementedError("Can't count result of query in async mode")
 
 
 class TransactionContext:
