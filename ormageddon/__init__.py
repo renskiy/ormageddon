@@ -151,8 +151,9 @@ class TransactionContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
-            return await self._transaction.commit()
-        return await self._transaction.rollback()
+            await self._transaction.commit()
+        else:
+            await self._transaction.rollback()
 
 
 class Transaction:
