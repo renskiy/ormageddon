@@ -13,7 +13,7 @@ You can test ORMageddon using following little example:
     import ormageddon
     import peewee
     
-    db = ormageddon.PostgresqlDatabase(database='ormageddon')
+    db = ormageddon.PostgresqlDatabase(database='ormageddon', user='postgres', host='127.0.0.1')
     
     class User(ormageddon.Model):
     
@@ -29,6 +29,11 @@ You can test ORMageddon using following little example:
     async def print_users(start=None, stop=None):
         async for user in User.select()[start:stop]:
             print(user)
+            
+    if __name__ == '__main__':
+        loop = asyncio.get_event_loop()
+        future = asyncio.gather(print_users(), loop=loop)
+        loop.run_until_complete(future)
 
 Transactions
 ------------
