@@ -21,18 +21,16 @@ You can test ORMageddon using following little example:
     
         id = ormageddon.PrimaryKeyField()
         
-    async def print_user(user_id):
-        user = await User.get(User.id == user_id)
-        print(user)
+    async def get_user(user_id):
+        return await User.get(User.id == user_id)
         
     async def print_users(start=None, stop=None):
         async for user in User.select()[start:stop]:
             print(user)
             
-    if __name__ == '__main__':
-        loop = asyncio.get_event_loop()
-        task = asyncio.gather(print_users(), loop=loop)
-        loop.run_until_complete(task)
+    async def create_user():
+        user = User()
+        await user.save()
 
 Transactions
 ------------
