@@ -5,9 +5,10 @@ import inspect
 
 __all__ = [
     'patch',
-    'map_async',
-    'zip_async',
     'future_generator',
+    'force_future',
+    'ensure_iterables',
+    'map_async',
 ]
 
 
@@ -19,14 +20,14 @@ def patch(obj, attr, value, default=None):
     setattr(obj, attr, original)
 
 
-async def _item(future, index):
+async def _future_item(future, index):
     return (await future)[index]
 
 
 def future_generator(future):
     index = 0
     while True:
-        yield _item(future, index)
+        yield _future_item(future, index)
         index += 1
 
 
@@ -45,11 +46,7 @@ def ensure_iterables(*iterables, loop=None):
     return result
 
 
-def zip_async(*iterables, loop=None):
-    return zip(*ensure_iterables(*iterables, loop=loop))
-
-
-def make_future(entity, loop=None):
+def force_future(entity, loop=None):
     if inspect.isawaitable(entity):
         return entity
     future = asyncio.Future(loop=loop)
@@ -57,12 +54,6 @@ def make_future(entity, loop=None):
     return future
 
 
-async def _map_async(callback, *iterables, loop=None):
-    futures = map(functools.partial(make_future, loop=loop), iterables)
+async def map_async(callback, *iterables, loop=None):
+    futures = map(functools.partial(force_future, loop=loop), iterables)
     return map(callback, *await asyncio.gather(*futures, loop=loop))
-
-
-def map_async(callback, *iterables, loop=None):
-    if any(map(inspect.isawaitable, iterables)):
-        return _map_async(callback, *iterables, loop=loop)
-    return map(callback, *iterables)

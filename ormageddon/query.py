@@ -13,6 +13,16 @@ __all__ = [
 ]
 
 
+def _map(callback, *iterables, loop=None):
+    if any(map(inspect.isawaitable, iterables)):
+        return map_async(callback, *iterables, loop=loop)
+    return map(callback, *iterables)
+
+
+def _zip(*iterables, loop=None):
+    return zip(*ensure_iterables(*iterables, loop=loop))
+
+
 class LazyCursor:
 
     def __init__(self, cursor_getter, loop=None):
@@ -106,8 +116,8 @@ class InsertQuery(Query, peewee.InsertQuery):
         cursor_getter = self._execute
         with contextlib.ExitStack() as exit_stack:
             exit_stack.enter_context(patch(self, '_execute', lambda: LazyCursor(cursor_getter, loop=loop)))
-            exit_stack.enter_context(patch(peewee, 'map', functools.partial(map_async, loop=loop), map))
-            exit_stack.enter_context(patch(peewee, 'zip', functools.partial(zip_async, loop=loop), zip))
+            exit_stack.enter_context(patch(peewee, 'map', functools.partial(_map, loop=loop), map))
+            exit_stack.enter_context(patch(peewee, 'zip', functools.partial(_zip, loop=loop), zip))
             result = super().execute()
             if inspect.isawaitable(result):
                 result = await result
