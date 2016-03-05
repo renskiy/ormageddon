@@ -11,7 +11,6 @@ Some examples
 You can test ORMageddon using following little example:
 
     import ormageddon
-    import peewee
     
     db = ormageddon.PostgresqlDatabase(database='ormageddon', user='postgres', host='127.0.0.1')
     
@@ -20,7 +19,7 @@ You can test ORMageddon using following little example:
         class Meta:
             database = db
     
-        id = peewee.PrimaryKeyField()
+        id = ormageddon.PrimaryKeyField()
         
     async def print_user(user_id):
         user = await User.get(User.id == user_id)
@@ -32,8 +31,8 @@ You can test ORMageddon using following little example:
             
     if __name__ == '__main__':
         loop = asyncio.get_event_loop()
-        future = asyncio.gather(print_users(), loop=loop)
-        loop.run_until_complete(future)
+        task = asyncio.gather(print_users(), loop=loop)
+        loop.run_until_complete(task)
 
 Transactions
 ------------

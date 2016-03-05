@@ -1,18 +1,35 @@
 import asyncio
 import contextlib
+import functools
+import inspect
 import weakref
 
 import aiopg
 import peewee
 import tasklocals
 
+from ormageddon.fields import *
+from ormageddon.utils import *
 
-@contextlib.contextmanager
-def patch(obj, attr, value, default=None):
-    original = getattr(obj, attr, default)
-    setattr(obj, attr, value)
-    yield
-    setattr(obj, attr, original)
+
+class LazyCursor:
+
+    def __init__(self, cursor_getter, loop=None):
+        self._real_cursor = asyncio.Future(loop=loop)
+        self.cursor_getter = cursor_getter
+
+    @property
+    async def real_cursor(self):
+        if not self._real_cursor.done():
+            real_cursor = await self.cursor_getter()
+            self._real_cursor.set_result(real_cursor)
+        return self._real_cursor.result()
+
+    async def fetchone(self):
+        return await (await self.real_cursor).fetchone()
+
+    async def fetchall(self):
+        return await (await self.real_cursor).fetchall()
 
 
 class TaskConnectionLocal(peewee._BaseConnectionLocal, tasklocals.local):
@@ -31,8 +48,28 @@ class Model(peewee.Model):
         query.__class__ = SelectQuery
         return query
 
+    @classmethod
+    def insert(cls, *args, **kwargs):
+        query = super().insert(*args, **kwargs)
+        query.__class__ = InsertQuery
+        return query
 
-class SelectQuery(peewee.SelectQuery):
+    async def save(self, force_insert=False, only=None):
+        result = super().save(force_insert=force_insert, only=only)
+        pk_field = self._meta.primary_key
+        if pk_field is not None:
+            pk_value = await getattr(self, pk_field.name)
+            setattr(self, pk_field.name, pk_value)
+        return result
+
+
+class Query(peewee.Query):
+
+    def scalar(self, as_tuple=False, convert=False):
+        pass  # TODO
+
+
+class SelectQuery(Query, peewee.SelectQuery):
 
     async def __aiter__(self):
         return await self.execute().__aiter__()
@@ -61,7 +98,7 @@ class SelectQuery(peewee.SelectQuery):
     def __getitem__(self, item):
         """
         Behavior of this method is slightly different from the original one
-        because of we are considering `slice.start` while `peewee` not
+        because of we are considering `slice.start` while `peewee` is not
         """
         clone = self.clone()
         if isinstance(item, slice):
@@ -88,6 +125,26 @@ class SelectQuery(peewee.SelectQuery):
             self.first(),
             loop=self.database.loop,
         ))
+
+
+class InsertQuery(Query, peewee.InsertQuery):
+
+    def _insert_with_loop(self):
+        pass  # TODO
+
+    async def execute(self):
+        loop = self.database.loop
+        cursor_getter = self._execute
+        with contextlib.ExitStack() as exit_stack:
+            exit_stack.enter_context(patch(self, '_execute', lambda: LazyCursor(cursor_getter, loop=loop)))
+            exit_stack.enter_context(patch(peewee, 'map', functools.partial(map_async, loop=loop), map))
+            exit_stack.enter_context(patch(peewee, 'zip', functools.partial(zip_async, loop=loop), zip))
+            result = super().execute()
+            if inspect.isawaitable(result):
+                result = await result
+            elif isinstance(result, list):
+                result = await asyncio.gather(*result, loop=loop)
+            return result
 
 
 class ResultIterator(peewee.ResultIterator):
@@ -333,3 +390,6 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     def rollback(self, transaction=None):
         return self.commit_or_rollback(transaction=transaction, rollback=True)
+
+    def last_insert_id(self, cursor, model):
+        pass  # TODO
