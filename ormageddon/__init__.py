@@ -21,8 +21,7 @@ class LazyCursor:
     @property
     async def real_cursor(self):
         if not self._real_cursor.done():
-            real_cursor = await self.cursor_getter()
-            self._real_cursor.set_result(real_cursor)
+            self._real_cursor.set_result(await self.cursor_getter())
         return self._real_cursor.result()
 
     async def fetchone(self):
@@ -246,7 +245,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     def __init__(self, *args, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
-        self.pool = asyncio.ensure_future(self._create_pool(), loop=self.loop)
+        self._pool = asyncio.Future(loop=self.loop)
         self.__local = TaskConnectionLocal(loop=self.loop, strict=False)
         super().__init__(*args, **kwargs)
 
@@ -260,6 +259,12 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         except:
             self.loop.stop()
             raise
+
+    @property
+    async def pool(self):
+        if not self._pool.done():
+            self._pool.set_result(await self._create_pool())
+        return self._pool.result()
 
     async def get_conn(self):
         pool = await self.pool
