@@ -14,7 +14,7 @@ class Field(peewee.Field):
         return super().python_value(await value)
 
     def python_value(self, value):
-        if inspect.iscoroutine(value):
+        if inspect.isawaitable(value):
             return self._python_value(value)
         return super().python_value(value)
 
