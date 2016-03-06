@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import inspect
 import weakref
 
 import aiopg
@@ -17,8 +18,8 @@ from ormageddon.utils import *
 class TaskConnectionLocal(peewee._BaseConnectionLocal, tasklocals.local):
 
     def __init__(self, **kwargs):
+        # ignore asyncio current task absence
         with contextlib.suppress(RuntimeError):
-            # ignore asyncio current task absence
             super().__init__()
 
 
@@ -49,8 +50,8 @@ class ResultIterator(peewee.ResultIterator):
 
     async def __anext__(self):
         try:
-            result = self.next()
-            if not self.qrw._populated:
+            result = self.__next__()
+            if inspect.isawaitable(result):
                 result = await result
                 self.qrw._result_cache[-1] = result
             return result
@@ -84,14 +85,35 @@ class NaiveQueryResultWrapper(peewee.NaiveQueryResultWrapper):
             return await super().iterate()
 
     def __iter__(self):
-        raise NotImplementedError("Can't iterate over query in async mode")
+        raise NotImplementedError
 
     async def __aiter__(self):
         return ResultIterator(self)
 
+    def __len__(self):
+        raise NotImplementedError
+
+    def __next__(self):
+        raise NotImplementedError
+
+    def next(self):
+        return self.__next__()
+
+    def iterator(self):
+        pass  # TODO
+
     @property
-    def count(self):
-        raise NotImplementedError("Can't count result of query in async mode")
+    async def count(self):
+        await self.fill_cache()
+        return self._ct
+
+    async def fill_cache(self, n=None):
+        index = 0
+        delta = 0 if n is None else 1
+        async for _ in self:
+            index += delta
+            if index == n:
+                break
 
 
 class PostgresqlDatabase(peewee.PostgresqlDatabase):
