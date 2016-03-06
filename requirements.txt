@@ -1,3 +1,4 @@
 aiopg
+cached-property
 peewee
 tasklocals

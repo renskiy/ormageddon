@@ -6,6 +6,8 @@ import aiopg
 import peewee
 import tasklocals
 
+from cached_property import cached_property
+
 from ormageddon.fields import *
 from ormageddon.query import *
 from ormageddon.transaction import *
@@ -96,7 +98,6 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
 
     def __init__(self, *args, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
-        self._pool = asyncio.Future(loop=self.loop)
         self.__local = TaskConnectionLocal(loop=self.loop, strict=False)
         super().__init__(*args, **kwargs)
 
@@ -111,11 +112,9 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
             self.loop.stop()
             raise
 
-    @property
-    async def pool(self):
-        if not self._pool.done():
-            self._pool.set_result(await self._create_pool())
-        return self._pool.result()
+    @cached_property
+    def pool(self):
+        return asyncio.ensure_future(self._create_pool(), loop=self.loop)
 
     async def get_conn(self):
         pool = await self.pool
