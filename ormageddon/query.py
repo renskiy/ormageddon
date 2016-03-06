@@ -24,7 +24,7 @@ def _zip(*iterables, loop=None):
     return zip(*ensure_iterables(*iterables, loop=loop))
 
 
-class LazyCursor:
+class _Cursor:
 
     __slots__ = ('cursor', )
 
@@ -52,14 +52,15 @@ class SelectQuery(Query, peewee.SelectQuery):
     async def __aiter__(self):
         return await self.execute().__aiter__()
 
-    def _first_result(self):
-        return next(self.execute())
+    async def _first_result(self):
+        async_iterator = await self.__aiter__()
+        return await async_iterator.__anext__()
 
-    async def get(self):
+    def get(self):
         clone = self.clone()
         clone._limit = 1
         with contextlib.suppress(StopAsyncIteration):
-            return await clone._first_result()
+            return clone._first_result()
         raise self.model_class.DoesNotExist(
             'Instance matching query does not exist:\nSQL: %s\nPARAMS: %s'
             % self.sql())
@@ -114,7 +115,7 @@ class InsertQuery(Query, peewee.InsertQuery):
         loop = self.database.loop
         fetch_cursor = self._execute
         with contextlib.ExitStack() as exit_stack:
-            exit_stack.enter_context(patch(self, '_execute', lambda: LazyCursor(fetch_cursor, loop=loop)))
+            exit_stack.enter_context(patch(self, '_execute', lambda: _Cursor(fetch_cursor, loop=loop)))
             exit_stack.enter_context(patch(peewee, 'map', functools.partial(_map, loop=loop), map))
             exit_stack.enter_context(patch(peewee, 'zip', functools.partial(_zip, loop=loop), zip))
             result = super().execute()
