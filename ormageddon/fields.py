@@ -10,12 +10,12 @@ __all__ = [
 
 class Field(peewee.Field):
 
-    async def _python_value(self, value):
+    async def async_python_value(self, value):
         return super().python_value(await value)
 
     def python_value(self, value):
         if inspect.isawaitable(value):
-            return self._python_value(value)
+            return self.async_python_value(value)
         return super().python_value(value)
 
 
