@@ -20,26 +20,25 @@ def _map(callback, *iterables, loop=None):
 
 
 def _zip(*iterables, loop=None):
+    assert not all(map(inspect.isawaitable, iterables))
     return zip(*ensure_iterables(*iterables, loop=loop))
 
 
 class LazyCursor:
 
-    def __init__(self, cursor_getter, loop=None):
-        self._real_cursor = asyncio.Future(loop=loop)
-        self.cursor_getter = cursor_getter
+    __slots__ = ('cursor', )
 
-    @property
-    async def real_cursor(self):
-        if not self._real_cursor.done():
-            self._real_cursor.set_result(await self.cursor_getter())
-        return self._real_cursor.result()
+    def __init__(self, fetch_cursor, loop=None):
+        self.cursor = asyncio.ensure_future(
+            fetch_cursor(),
+            loop=loop,
+        )
 
     async def fetchone(self):
-        return await (await self.real_cursor).fetchone()
+        return await (await self.cursor).fetchone()
 
     async def fetchall(self):
-        return await (await self.real_cursor).fetchall()
+        return await (await self.cursor).fetchall()
 
 
 class Query(peewee.Query):
@@ -113,9 +112,9 @@ class InsertQuery(Query, peewee.InsertQuery):
 
     async def execute(self):
         loop = self.database.loop
-        cursor_getter = self._execute
+        fetch_cursor = self._execute
         with contextlib.ExitStack() as exit_stack:
-            exit_stack.enter_context(patch(self, '_execute', lambda: LazyCursor(cursor_getter, loop=loop)))
+            exit_stack.enter_context(patch(self, '_execute', lambda: LazyCursor(fetch_cursor, loop=loop)))
             exit_stack.enter_context(patch(peewee, 'map', functools.partial(_map, loop=loop), map))
             exit_stack.enter_context(patch(peewee, 'zip', functools.partial(_zip, loop=loop), zip))
             result = super().execute()

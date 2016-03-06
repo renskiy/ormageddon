@@ -32,18 +32,12 @@ def future_generator(future):
 
 
 def ensure_iterables(*iterables, loop=None):
-    result = []
-    all_iterables_are_awaitable = True
     for iterable in iterables:
         if inspect.isawaitable(iterable):
             future = asyncio.ensure_future(iterable, loop=loop)
-            result.append(future_generator(future))
+            yield future_generator(future)
         else:
-            all_iterables_are_awaitable = False
-            result.append(iterable)
-    if all_iterables_are_awaitable:
-        raise ValueError('There must be at least one common iterator')
-    return result
+            yield iterable
 
 
 def force_future(entity, loop=None):
