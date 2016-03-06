@@ -5,7 +5,7 @@ import inspect
 
 __all__ = [
     'patch',
-    'future_generator',
+    'future_iterator',
     'force_future',
     'ensure_iterables',
     'map_async',
@@ -24,7 +24,7 @@ async def _future_item(future, index):
     return (await future)[index]
 
 
-def future_generator(future):
+def future_iterator(future):
     index = 0
     while True:
         yield _future_item(future, index)
@@ -35,7 +35,7 @@ def ensure_iterables(*iterables, loop=None):
     for iterable in iterables:
         if inspect.isawaitable(iterable):
             future = asyncio.ensure_future(iterable, loop=loop)
-            yield future_generator(future)
+            yield future_iterator(future)
         else:
             yield iterable
 
