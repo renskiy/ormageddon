@@ -6,17 +6,12 @@ import peewee
 
 from cached_property import cached_property
 
-from ormageddon.db import TaskConnectionLocal
+from ormageddon.db import Database
 from ormageddon.transaction import Transaction, TransactionContext
 from ormageddon.wrappers import NaiveQueryResultWrapper
 
 
-class PostgresqlDatabase(peewee.PostgresqlDatabase):
-
-    def __init__(self, *args, loop=None, **kwargs):
-        self.loop = loop or asyncio.get_event_loop()
-        self.__local = TaskConnectionLocal(loop=self.loop, strict=False)
-        super().__init__(*args, **kwargs)
+class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
 
     async def _create_pool(self):
         try:
@@ -56,29 +51,8 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase):
         if wrapper_type == peewee.RESULTS_NAIVE:
             return NaiveQueryResultWrapper
 
-    def set_autocommit(self, autocommit):
-        self.__local.autocommit = autocommit
-
-    def get_autocommit(self):
-        if self.__local.autocommit is None:
-            self.set_autocommit(self.autocommit)
-        return self.__local.autocommit
-
     def transaction(self):
         return TransactionContext(self.begin())
-
-    def push_transaction(self, transaction):
-        self.__local.transactions.append(transaction)
-
-    def pop_transaction(self):
-        self.__local.transactions.pop()
-
-    def transaction_depth(self):
-        return len(self.__local.transactions)
-
-    def get_transaction(self) -> Transaction:
-        if self.transaction_depth() == 1:
-            return self.__local.transactions[-1]
 
     async def _execute_sql(
         self,
