@@ -108,8 +108,15 @@ class SelectQuery(Query, peewee.SelectQuery):
 
 class InsertQuery(Query, peewee.InsertQuery):
 
-    def _insert_with_loop(self):
-        pass  # TODO
+    async def _insert_with_loop(self):
+        with patch(self, '_return_id_list', True):
+            id_list = await asyncio.gather(
+                *super()._insert_with_loop(),
+                loop=self.database.loop,
+            )
+        if self._return_id_list:
+            return id_list
+        return id_list[-1]
 
     async def execute(self):
         loop = self.database.loop
@@ -120,7 +127,7 @@ class InsertQuery(Query, peewee.InsertQuery):
             exit_stack.enter_context(patch(peewee, 'zip', functools.partial(_zip, loop=loop), zip))
             result = super().execute()
             if inspect.isawaitable(result):
-                result = await result
+                return await result
             elif isinstance(result, list):
-                result = await asyncio.gather(*result, loop=loop)
+                return await asyncio.gather(*result, loop=loop)
             return result
