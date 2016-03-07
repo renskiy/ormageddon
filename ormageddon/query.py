@@ -5,7 +5,7 @@ import inspect
 
 import peewee
 
-from ormageddon.utils import *
+from ormageddon.utils import patch, map_async, ensure_iterables
 
 __all__ = [
     'SelectQuery',
