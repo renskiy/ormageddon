@@ -1,8 +1,10 @@
+import contextlib
 import inspect
 
 import peewee
 
 from ormageddon.query import *
+from ormageddon.utils import patch
 
 __all__ = [
     'Model',
@@ -28,6 +30,24 @@ class Model(peewee.Model):
         query = super().update(*args, **kwargs)
         query.__class__ = UpdateQuery
         return query
+
+    @classmethod
+    def delete(cls):
+        return DeleteQuery(cls)
+
+    async def delete_instance(self, recursive=False, delete_nullable=False):
+        def executor(execute):
+            def _execute(query):
+                queries_to_execute.append(execute(query))
+            return _execute
+        queries_to_execute = []
+        with contextlib.ExitStack() as exit_stack:
+            exit_stack.enter_context(patch(DeleteQuery, 'execute', executor(DeleteQuery.execute)))
+            exit_stack.enter_context(patch(UpdateQuery, 'execute', executor(UpdateQuery.execute)))
+            super().delete_instance(recursive=recursive, delete_nullable=delete_nullable)
+        for future in queries_to_execute:
+            result = await future
+        return result
 
     async def save(self, force_insert=False, only=None):
         result = super().save(force_insert=force_insert, only=only)

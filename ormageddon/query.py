@@ -11,6 +11,7 @@ __all__ = [
     'SelectQuery',
     'UpdateQuery',
     'InsertQuery',
+    'DeleteQuery',
 ]
 
 
@@ -158,3 +159,10 @@ class InsertQuery(Query, peewee.InsertQuery):
             elif isinstance(result, list):
                 return await asyncio.gather(*result, loop=loop)
             return result
+
+
+class DeleteQuery(Query, peewee.DeleteQuery):
+
+    def execute(self):
+        with patch(self, '_execute', _QueryExecutor(self._execute, loop=self.database.loop)):
+            return super().execute()
