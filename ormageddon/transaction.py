@@ -14,11 +14,11 @@ class TransactionContext:
         self._transaction = transaction = await self.transaction
         return transaction
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
-            await self._transaction.commit()
+            return self._transaction.commit(close_transaction=True)
         else:
-            await self._transaction.rollback()
+            return self._transaction.rollback(close_transaction=True)
 
 
 class Transaction:
@@ -28,8 +28,12 @@ class Transaction:
         self._autocommit = db.get_autocommit()
         self._connection = None
 
+    @property
+    def started(self):
+        return self._connection is not None
+
     def _get_connection(self):
-        assert self._connection is not None
+        assert self.started
         return self._connection
 
     def _set_connection(self, connection):
@@ -43,8 +47,8 @@ class Transaction:
     def restore_autocommit(self):
         self.db.set_autocommit(self._autocommit)
 
-    async def commit(self):
-        await self.db.commit(self)
+    def commit(self, close_transaction=False):
+        return self.db.commit(close_transaction=close_transaction)
 
-    async def rollback(self):
-        await self.db.rollback(self)
+    def rollback(self, close_transaction=False):
+        return self.db.rollback(close_transaction=close_transaction)

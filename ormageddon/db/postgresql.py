@@ -51,9 +51,6 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
         if wrapper_type == peewee.RESULTS_NAIVE:
             return NaiveQueryResultWrapper
 
-    def transaction(self):
-        return TransactionContext(self.begin())
-
     async def _execute_sql(
         self,
         sql,
@@ -78,8 +75,15 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
             connection=connection,
         )
 
+    def transaction(self):
+        return TransactionContext(self.begin())
+
     async def _begin(self, transaction):
-        cursor = await self.get_cursor(release_new_connection=False)
+        connection = transaction.started and transaction.connection or None
+        cursor = await self.get_cursor(
+            connection=connection,
+            release_new_connection=False,
+        )
         await cursor.execute('BEGIN')
         transaction.connection = cursor.connection
         return transaction
@@ -110,32 +114,44 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
         )
         await cursor.execute('ROLLBACK')
 
+    async def _restart_transaction(self, transaction, commit_or_rollback):
+        await commit_or_rollback(connection=transaction.connection)
+        await self._begin(transaction)
+
     def commit_or_rollback(
         self,
-        transaction=None,
         commit=False,
         rollback=False,
+        close_transaction=True,
     ):
         assert commit ^ rollback, "You must choose either commit or rollback"
-        transaction = transaction or self.get_transaction()
+        transaction = self.get_transaction()
         if transaction:
-            self.pop_transaction()
-            transaction.restore_autocommit()
-            command = commit and self._commit or rollback and self._rollback
-            return command(
-                connection=transaction.connection,
-                force_release_connection=True,
-            )
+            commit_or_rollback = commit and self._commit or rollback and self._rollback
+            if close_transaction:
+                self.pop_transaction()
+                transaction.restore_autocommit()
+                return commit_or_rollback(
+                    connection=transaction.connection,
+                    force_release_connection=True,
+                )
+            return self._restart_transaction(transaction, commit_or_rollback)
         # TODO raise warning?
         future = asyncio.Future(loop=self.loop)
         future.set_result(None)
         return future
 
-    def commit(self, transaction=None):
-        return self.commit_or_rollback(transaction=transaction, commit=True)
+    def commit(self, close_transaction=True):
+        return self.commit_or_rollback(
+            commit=True,
+            close_transaction=close_transaction,
+        )
 
-    def rollback(self, transaction=None):
-        return self.commit_or_rollback(transaction=transaction, rollback=True)
+    def rollback(self, close_transaction=True):
+        return self.commit_or_rollback(
+            rollback=True,
+            close_transaction=close_transaction,
+        )
 
     def last_insert_id(self, cursor, model):
         pass  # TODO
