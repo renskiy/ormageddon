@@ -1,3 +1,5 @@
+import inspect
+
 import peewee
 
 from ormageddon.query import *
@@ -21,10 +23,18 @@ class Model(peewee.Model):
         query.__class__ = InsertQuery
         return query
 
+    @classmethod
+    def update(cls, *args, **kwargs):
+        query = super().update(*args, **kwargs)
+        query.__class__ = UpdateQuery
+        return query
+
     async def save(self, force_insert=False, only=None):
         result = super().save(force_insert=force_insert, only=only)
-        pk_field = self._meta.primary_key
-        if pk_field is not None:
-            pk_value = await getattr(self, pk_field.name)
-            setattr(self, pk_field.name, pk_value)
+        if self._meta.primary_key is not False:
+            pk_value = self._get_pk_value()
+            if inspect.isawaitable(pk_value):
+                self._set_pk_value(await pk_value)
+        if inspect.isawaitable(result):
+            return await result
         return result

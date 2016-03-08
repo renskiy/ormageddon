@@ -9,6 +9,7 @@ from ormageddon.utils import patch, map_async, ensure_iterables
 
 __all__ = [
     'SelectQuery',
+    'UpdateQuery',
     'InsertQuery',
 ]
 
@@ -24,21 +25,31 @@ def _zip(*iterables, loop=None):
     return zip(*ensure_iterables(*iterables, loop=loop))
 
 
-class _Cursor:
+class _QueryExecutor:
 
-    __slots__ = ('cursor', )
+    __slots__ = ('cursor', 'execute', 'loop')
 
-    def __init__(self, fetch_cursor, loop=None):
+    def __init__(self, execute, loop=None):
+        self.cursor = None
+        self.execute = execute
+        self.loop = loop
+
+    def __call__(self):
         self.cursor = asyncio.ensure_future(
-            fetch_cursor(),
-            loop=loop,
+            self.execute(),
+            loop=self.loop,
         )
+        return self
 
     async def fetchone(self):
         return await (await self.cursor).fetchone()
 
     async def fetchall(self):
         return await (await self.cursor).fetchall()
+
+    @property
+    async def rowcount(self):
+        return (await self.cursor).rowcount
 
 
 class Query(peewee.Query):
@@ -49,8 +60,8 @@ class Query(peewee.Query):
 
 class SelectQuery(Query, peewee.SelectQuery):
 
-    async def __aiter__(self):
-        return await self.execute().__aiter__()
+    def __aiter__(self):
+        return self.execute().__aiter__()
 
     async def _first_result(self):
         async_iterator = await self.__aiter__()
@@ -106,6 +117,23 @@ class SelectQuery(Query, peewee.SelectQuery):
         ))
 
 
+class UpdateQuery(Query, peewee.UpdateQuery):
+
+    def __aiter__(self):
+        if not self.model_class._meta.database.returning_clause:
+            raise ValueError('UPDATE queries cannot be iterated over unless '
+                             'they specify a RETURNING clause, which is not '
+                             'supported by your database.')
+        return self.execute().__aiter__()
+
+    def __iter__(self):
+        raise NotImplementedError
+
+    def execute(self):
+        with patch(self, '_execute', _QueryExecutor(self._execute, loop=self.database.loop)):
+            return super().execute()
+
+
 class InsertQuery(Query, peewee.InsertQuery):
 
     async def _insert_with_loop(self):
@@ -120,9 +148,8 @@ class InsertQuery(Query, peewee.InsertQuery):
 
     async def execute(self):
         loop = self.database.loop
-        fetch_cursor = self._execute
         with contextlib.ExitStack() as exit_stack:
-            exit_stack.enter_context(patch(self, '_execute', lambda: _Cursor(fetch_cursor, loop=loop)))
+            exit_stack.enter_context(patch(self, '_execute', _QueryExecutor(self._execute, loop=loop)))
             exit_stack.enter_context(patch(peewee, 'map', functools.partial(_map, loop=loop), map))
             exit_stack.enter_context(patch(peewee, 'zip', functools.partial(_zip, loop=loop), zip))
             result = super().execute()
