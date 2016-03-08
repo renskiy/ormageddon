@@ -1,6 +1,12 @@
 Changelog
 =========
 
+Release 0.2
+-----------
+
+- Enhancement: Reworked project structure
+- Enhancement: Implemented :code:`insert()`, :code:`update()` and :code:`delete()`
+
 Release 0.1.2
 -------------
 
