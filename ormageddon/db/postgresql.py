@@ -7,7 +7,8 @@ import peewee
 from cached_property import cached_property
 
 from ormageddon.db import Database
-from ormageddon.transaction import Transaction, TransactionContext
+from ormageddon.transaction import TransactionContext
+from ormageddon.utils import force_future
 from ormageddon.wrappers import NaiveQueryResultWrapper
 
 
@@ -76,7 +77,8 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
         )
 
     def transaction(self):
-        return TransactionContext(self.begin())
+        transaction = self.get_transaction(create_if_not_exists=True)
+        return TransactionContext(transaction)
 
     async def _begin(self, transaction):
         connection = transaction.started and transaction.connection or None
@@ -86,19 +88,10 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
         )
         await cursor.execute('BEGIN')
         transaction.connection = cursor.connection
-        return transaction
 
     def begin(self):
-        transaction = self.get_transaction()
-        if not transaction:
-            transaction = Transaction(self)
-            transaction.disable_autocommit()
-            self.push_transaction(transaction)
-            return self._begin(transaction)
-        # TODO raise warning?
-        future = asyncio.Future(loop=self.loop)
-        future.set_result(transaction)
-        return future
+        transaction = self.get_transaction(create_if_not_exists=True)
+        return transaction.begin()
 
     async def _commit(self, connection, force_release_connection=False):
         cursor = await self.get_cursor(
@@ -137,9 +130,7 @@ class PostgresqlDatabase(peewee.PostgresqlDatabase, Database):
                 )
             return self._restart_transaction(transaction, commit_or_rollback)
         # TODO raise warning?
-        future = asyncio.Future(loop=self.loop)
-        future.set_result(None)
-        return future
+        return force_future(None, loop=self.loop)
 
     def commit(self, close_transaction=True):
         return self.commit_or_rollback(

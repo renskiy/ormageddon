@@ -4,6 +4,8 @@ import contextlib
 import peewee
 import tasklocals
 
+from ormageddon.transaction import Transaction
+
 __all__ = [
     'PostgresqlDatabase',
 ]
@@ -41,9 +43,14 @@ class Database(peewee.Database):
     def transaction_depth(self):
         return len(self.__local.transactions)
 
-    def get_transaction(self):
+    def get_transaction(self, create_if_not_exists=False):
         if self.transaction_depth() == 1:
             return self.__local.transactions[-1]
+        if create_if_not_exists:
+            transaction = Transaction(self)
+            transaction.disable_autocommit()
+            self.push_transaction(transaction)
+            return transaction
 
 
 class MisconfiguredDatabase:
